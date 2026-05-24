@@ -607,6 +607,18 @@ h2 em { font-style: italic; color: var(--wine); font-weight: 400; }
   font-size: 11px; color: var(--gold2);
   letter-spacing: 0.08em; display: none; margin-top: 0.75rem;
 }
+#cf-fail {
+  font-size: 11px; color: #e05a6a;
+  letter-spacing: 0.08em; display: none; margin-top: 0.75rem;
+}
+.cf-error {
+  font-size: 10px; color: #e05a6a;
+  letter-spacing: 0.06em; margin-top: 4px;
+  min-height: 14px;
+}
+.cf-input.invalid, .cf-textarea.invalid {
+  border-color: rgba(224, 90, 106, 0.6);
+}
 
 /* ── FOOTER ── */
 footer {
@@ -1291,25 +1303,30 @@ footer {
     <a href="mailto:harshdavdawork@gmail.com?subject=Resume%20Request%20-%20Harsh%20Davda" class="btn-wine">Request Resume</a>
   </div>
   <div class="contact-right reveal reveal-delay-1">
-    <form action="https://formspree.io/f/xojblbrv" method="POST">
+    <form id="contact-form" onsubmit="submitForm(event)" novalidate>
       <div class="cf-group">
         <label class="cf-label">Name</label>
-        <input type="text" class="cf-input" placeholder="Your name" required>
+        <input type="text" id="cf-name" name="name" class="cf-input" placeholder="Your name" autocomplete="name" maxlength="100">
+        <div class="cf-error" id="err-name"></div>
       </div>
       <div class="cf-group">
         <label class="cf-label">Email</label>
-        <input type="email" class="cf-input" placeholder="your@email.com" required>
+        <input type="email" id="cf-email" name="email" class="cf-input" placeholder="your@email.com" autocomplete="email" maxlength="200">
+        <div class="cf-error" id="err-email"></div>
       </div>
       <div class="cf-group">
         <label class="cf-label">Subject</label>
-        <input type="text" class="cf-input" placeholder="Job opportunity / Collaboration / Audit engagement">
+        <input type="text" id="cf-subject" name="subject" class="cf-input" placeholder="Job opportunity / Collaboration / Audit engagement" maxlength="150">
+        <div class="cf-error" id="err-subject"></div>
       </div>
       <div class="cf-group">
         <label class="cf-label">Message</label>
-        <textarea class="cf-textarea" placeholder="Tell me about the opportunity or project…"></textarea>
+        <textarea id="cf-message" name="message" class="cf-textarea" placeholder="Tell me about the opportunity or project…" maxlength="2000"></textarea>
+        <div class="cf-error" id="err-message"></div>
       </div>
-      <button type="submit" class="cf-submit">Send Message</button>
+      <button type="submit" class="cf-submit" id="cf-btn">Send Message</button>
       <div id="cf-ok">✓ Received - I'll respond shortly.</div>
+      <div id="cf-fail">✕ Something went wrong. Please email me directly.</div>
     </form>
   </div>
 </div>
@@ -1351,11 +1368,89 @@ function toggleProj(el) {
   if (!wasOpen) el.classList.add('open');
 }
 
-// Form
-function submitForm(e) {
+// ── FORM: validation + Formspree Ajax SDK ──
+const validators = {
+  name:    { fn: v => v.trim().length >= 2 && v.trim().length <= 100 && /^[a-zA-Z\s'\-.]+$/.test(v.trim()), msg: 'Name must be 2–100 letters only.' },
+  email:   { fn: v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim()) && v.length <= 200,                    msg: 'Please enter a valid email address.' },
+  subject: { fn: v => v.trim().length >= 3 && v.trim().length <= 150,                                        msg: 'Subject must be 3–150 characters.' },
+  message: { fn: v => v.trim().length >= 10 && v.trim().length <= 2000,                                      msg: 'Message must be 10–2000 characters.' }
+};
+
+function validateField(id, rule) {
+  const el = document.getElementById(id);
+  const errEl = document.getElementById('err-' + id.replace('cf-', ''));
+  if (!rule.fn(el.value)) {
+    el.classList.add('invalid');
+    errEl.textContent = rule.msg;
+    return false;
+  }
+  el.classList.remove('invalid');
+  errEl.textContent = '';
+  return true;
+}
+
+['cf-name','cf-email','cf-subject','cf-message'].forEach(id => {
+  const key = id.replace('cf-', '');
+  document.getElementById(id).addEventListener('blur',  () => validateField(id, validators[key]));
+  document.getElementById(id).addEventListener('input', () => {
+    if (document.getElementById(id).classList.contains('invalid')) validateField(id, validators[key]);
+  });
+});
+
+async function submitForm(e) {
   e.preventDefault();
-  document.getElementById('cf-ok').style.display = 'block';
-  e.target.reset();
+
+  const fields = [
+    { id: 'cf-name',    key: 'name' },
+    { id: 'cf-email',   key: 'email' },
+    { id: 'cf-subject', key: 'subject' },
+    { id: 'cf-message', key: 'message' }
+  ];
+
+  let valid = true;
+  fields.forEach(f => { if (!validateField(f.id, validators[f.key])) valid = false; });
+  if (!valid) return;
+
+  const btn = document.getElementById('cf-btn');
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  document.getElementById('cf-ok').style.display = 'none';
+  document.getElementById('cf-fail').style.display = 'none';
+
+  // Build FormData - what Formspree's Ajax SDK sends under the hood
+  const formData = new FormData();
+  fields.forEach(f => formData.append(f.key, document.getElementById(f.id).value.trim()));
+
+  try {
+    const res = await fetch('https://formspree.io/f/xojblbrv', {
+      method: 'POST',
+      body: formData,
+      headers: { 'Accept': 'application/json' }
+    });
+
+    const json = await res.json();
+
+    if (res.ok) {
+      document.getElementById('cf-ok').style.display = 'block';
+      document.getElementById('contact-form').reset();
+      document.querySelectorAll('.cf-input,.cf-textarea').forEach(el => el.classList.remove('invalid'));
+    } else {
+      // Show Formspree's own field errors if present
+      if (json.errors) {
+        json.errors.forEach(err => {
+          const errEl = document.getElementById('err-' + err.field);
+          if (errEl) { errEl.textContent = err.message; document.getElementById('cf-' + err.field)?.classList.add('invalid'); }
+        });
+      } else {
+        document.getElementById('cf-fail').style.display = 'block';
+      }
+    }
+  } catch {
+    document.getElementById('cf-fail').style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send Message';
+  }
 }
 </script>
 </body>
